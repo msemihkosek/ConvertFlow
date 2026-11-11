@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# Environment & Secrets
+.env
+.env.*
+*.local
+
+# Logs & Temp Files
+logs/
+*.log
+npm-debug.log*
+*.tmp
+*.temp
+server/temp/
+convertflow_temp/
+
+# Generated Assets & Test Artifacts
+context-menu/convertflow.ico
+scratch/*.pdf
+scratch/*.docx
+scratch/*.pptx
+scratch/*.xlsx
+scratch/*.zip
+scratch/*.png
+scratch/*.jpg
+
+# OS & Editors
+.DS_Store
+Thumbs.db
+Desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.sw?

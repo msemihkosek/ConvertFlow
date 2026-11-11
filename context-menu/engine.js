@@ -84,26 +84,40 @@ function removeQuiet(targetPath) {
 }
 
 /**
- * Registers Arial (Turkish Unicode) font on a jsPDF instance if present on Windows.
+ * Registers a Unicode TTF font (supporting Turkish ğüşıöçĞÜŞİÖÇ) on a jsPDF instance across Windows, macOS, and Linux.
  */
 function applyUnicodeFont(doc, style = 'normal') {
-  const regularPath = 'C:\\Windows\\Fonts\\arial.ttf';
-  const boldPath = 'C:\\Windows\\Fonts\\arialbd.ttf';
+  const candidates = process.platform === 'win32'
+    ? [
+        { reg: 'C:\\Windows\\Fonts\\arial.ttf', bold: 'C:\\Windows\\Fonts\\arialbd.ttf' },
+        { reg: 'C:\\Windows\\Fonts\\segoeui.ttf', bold: 'C:\\Windows\\Fonts\\segoeuib.ttf' }
+      ]
+    : process.platform === 'darwin'
+    ? [
+        { reg: '/System/Library/Fonts/Supplemental/Arial.ttf', bold: '/System/Library/Fonts/Supplemental/Arial Bold.ttf' },
+        { reg: '/Library/Fonts/Arial.ttf', bold: '/Library/Fonts/Arial Bold.ttf' }
+      ]
+    : [
+        { reg: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', bold: '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' },
+        { reg: '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf', bold: '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf' }
+      ];
 
-  if (fs.existsSync(regularPath)) {
+  const match = candidates.find((c) => fs.existsSync(c.reg));
+  if (match) {
     try {
-      const regularB64 = fs.readFileSync(regularPath).toString('base64');
-      doc.addFileToVFS('arial.ttf', regularB64);
-      doc.addFont('arial.ttf', 'ArialUnicode', 'normal');
+      const regularB64 = fs.readFileSync(match.reg).toString('base64');
+      doc.addFileToVFS('unicode.ttf', regularB64);
+      doc.addFont('unicode.ttf', 'AppUnicode', 'normal');
 
-      if (fs.existsSync(boldPath)) {
-        const boldB64 = fs.readFileSync(boldPath).toString('base64');
-        doc.addFileToVFS('arialbd.ttf', boldB64);
-        doc.addFont('arialbd.ttf', 'ArialUnicode', 'bold');
+      const hasBold = match.bold && fs.existsSync(match.bold);
+      if (hasBold) {
+        const boldB64 = fs.readFileSync(match.bold).toString('base64');
+        doc.addFileToVFS('unicode-bold.ttf', boldB64);
+        doc.addFont('unicode-bold.ttf', 'AppUnicode', 'bold');
       }
 
-      doc.setFont('ArialUnicode', style === 'bold' && fs.existsSync(boldPath) ? 'bold' : 'normal');
-      return 'ArialUnicode';
+      doc.setFont('AppUnicode', style === 'bold' && hasBold ? 'bold' : 'normal');
+      return 'AppUnicode';
     } catch {
       // Fallback below
     }
@@ -224,16 +238,28 @@ async function extractPdfPagesText(inputPath) {
   return { numPages, pages };
 }
 
+function resolvePythonBin() {
+  const isWin = process.platform === 'win32';
+  const relPy = isWin ? path.join('Scripts', 'python.exe') : path.join('bin', 'python');
+  const candidates = [
+    path.join(ROOT_DIR, '.venv', relPy),
+    path.join(os.homedir(), '.venv', relPy)
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return isWin ? 'python' : 'python3';
+}
+
 /**
- * Runs the Python PyMuPDF / pdf2docx engine. Returns stdout on success or null if Python engine is unavailable.
+ * Runs the Python PyMuPDF / pdf2docx engine.
  */
 async function runPythonPdfEngine(mode, inputPath, outputPath) {
   if (!fs.existsSync(PYTHON_PDF_ENGINE)) {
     throw new Error(`Python PDF motoru bulunamadı: ${PYTHON_PDF_ENGINE}`);
   }
 
-  const venvPython = path.join(os.homedir(), '.venv', 'Scripts', 'python.exe');
-  const pythonBin = fs.existsSync(venvPython) ? venvPython : 'python';
+  const pythonBin = resolvePythonBin();
 
   return new Promise((resolve, reject) => {
     execFile(pythonBin, [PYTHON_PDF_ENGINE, mode, inputPath, outputPath], {
@@ -270,9 +296,10 @@ async function renderPdfPagesToPngDir(inputPath, scale = 2.0) {
     // Fallback to Windows WinRT PDF renderer below
   }
 
-  if (!fs.existsSync(PDF_RENDER_SCRIPT)) {
+  // Fallback to Windows WinRT PDF renderer on Windows only
+  if (process.platform !== 'win32' || !fs.existsSync(PDF_RENDER_SCRIPT)) {
     removeQuiet(tempOutDir);
-    throw new Error(`PDF render betiği bulunamadı: ${PDF_RENDER_SCRIPT}`);
+    throw new Error('PDF sayfaları görsele dönüştürülemedi (PyMuPDF kurulu olduğundan emin olun).');
   }
 
   const args = [
@@ -357,22 +384,36 @@ function renderLinesToPdfBuffer(lines, title = '') {
 }
 
 /**
- * Converts HTML file to PDF using Microsoft Edge headless when available, or plain text fallback.
+ * Converts HTML file to PDF using headless Edge/Chrome/Chromium across Windows, macOS, and Linux, or plain text fallback.
  */
 async function convertHtmlToPdf(inputPath, outputPath) {
-  const edgePaths = [
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe'
-  ];
-  const edgeExe = edgePaths.find((p) => fs.existsSync(p));
+  const browserCandidates = process.platform === 'win32'
+    ? [
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+      ]
+    : process.platform === 'darwin'
+    ? [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium'
+      ]
+    : [
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/microsoft-edge'
+      ];
+  const browserExe = browserCandidates.find((p) => fs.existsSync(p));
 
-  if (edgeExe) {
+  if (browserExe) {
     try {
       const tempProfile = createTempPath('');
       fs.mkdirSync(tempProfile, { recursive: true });
       const fileUrl = pathToFileURL(inputPath).href;
       await new Promise((resolve, reject) => {
-        execFile(edgeExe, [
+        execFile(browserExe, [
           '--headless=new',
           '--disable-gpu',
           '--no-first-run',

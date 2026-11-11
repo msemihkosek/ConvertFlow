@@ -1,41 +1,36 @@
-// ConvertFlow - Windows Right-Click Cascading Context Menu Installer
+// ConvertFlow - Cross-Platform Context Menu Installer (Windows, macOS, Linux)
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import sharp from 'sharp';
-import { EXTENSION_TARGETS, getMenuTargetsForExtension } from './formats.js';
+import { EXTENSION_TARGETS, TARGET_LABELS, getMenuTargetsForExtension } from './formats.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const RUN_HIDDEN_VBS = path.resolve(__dirname, 'run-hidden.vbs');
+const CLI_SCRIPT = path.resolve(__dirname, 'convert-cli.js');
 const ICON_PATH = path.resolve(__dirname, 'convertflow.ico');
 const NODE_EXE = process.execPath;
 
-/**
- * Generates a crisp ConvertFlow .ico icon using Sharp so the right-click menu looks native.
- */
-async function ensureIconExists() {
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
-    <defs>
-      <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#6366f1"/>
-        <stop offset="100%" stop-color="#a855f7"/>
-      </linearGradient>
-    </defs>
-    <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#g)"/>
-    <path d="M40 48h36l-10-10a5 5 0 0 1 7-7l19 19a5 5 0 0 1 0 7L73 76a5 5 0 0 1-7-7l10-10H40a5 5 0 0 1 0-11z" fill="#ffffff"/>
-    <path d="M88 80H52l10 10a5 5 0 0 1-7 7L36 78a5 5 0 0 1 0-7l19-19a5 5 0 0 1 7 7L52 69h36a5 5 0 0 1 0 11z" fill="#e0e7ff" opacity="0.92"/>
-  </svg>`;
+const LOGO_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#g)"/>
+  <path d="M40 48h36l-10-10a5 5 0 0 1 7-7l19 19a5 5 0 0 1 0 7L73 76a5 5 0 0 1-7-7l10-10H40a5 5 0 0 1 0-11z" fill="#ffffff"/>
+  <path d="M88 80H52l10 10a5 5 0 0 1-7 7L36 78a5 5 0 0 1 0-7l19-19a5 5 0 0 1 7 7L52 69h36a5 5 0 0 1 0 11z" fill="#e0e7ff" opacity="0.92"/>
+</svg>`;
 
+async function ensureWindowsIcon() {
   const size = 64;
-  const pngBuffer = await sharp(Buffer.from(svg))
-    .resize(size, size)
-    .png()
-    .toBuffer();
+  const pngBuffer = await sharp(Buffer.from(LOGO_SVG)).resize(size, size).png().toBuffer();
 
   const header = Buffer.alloc(22);
   header.writeUInt16LE(0, 0);
@@ -57,17 +52,22 @@ function psEscape(str) {
   return String(str).replace(/'/g, "''");
 }
 
-async function install() {
-  if (process.platform !== 'win32') {
-    console.error('Bu sağ tık menüsü kurulumu yalnızca Windows içindir.');
-    process.exit(1);
-  }
+function xmlEscape(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 
+// =====================================================================
+// 1. WINDOWS (HKCU Registry Cascading Context Menu)
+// =====================================================================
+async function installWindows() {
   if (!fs.existsSync(RUN_HIDDEN_VBS)) {
     throw new Error(`Gerekli başlatıcı bulunamadı: ${RUN_HIDDEN_VBS}`);
   }
 
-  await ensureIconExists();
+  await ensureWindowsIcon();
 
   const extensions = Object.keys(EXTENSION_TARGETS);
   const psLines = [
@@ -86,10 +86,7 @@ async function install() {
     const menuClass = `ConvertFlow.Menu.${ext}`;
     const assocKey = `Software\\Classes\\SystemFileAssociations\\.${ext}\\shell\\ConvertFlow`;
 
-    // Clear old submenu definition for clean re-install
     psLines.push(`$hkcu.DeleteSubKeyTree('Software\\Classes\\${psEscape(menuClass)}', $false)`);
-
-    // Register top-level cascading entry on the extension
     psLines.push(`Set-RegVal '${psEscape(assocKey)}' 'MUIVerb' 'ConvertFlow ile Dönüştür'`);
     psLines.push(`Set-RegVal '${psEscape(assocKey)}' 'Icon' '${psEscape(ICON_PATH)}'`);
     psLines.push(`Set-RegVal '${psEscape(assocKey)}' 'ExtendedSubCommandsKey' '${psEscape(menuClass)}'`);
@@ -108,7 +105,6 @@ async function install() {
   }
 
   const tempPs1 = path.join(os.tmpdir(), `cf_install_menu_${Date.now()}.ps1`);
-  // UTF-8 with BOM so PowerShell 5.1 reads Turkish characters cleanly
   fs.writeFileSync(tempPs1, '\uFEFF' + psLines.join('\r\n'), 'utf-8');
 
   try {
@@ -122,15 +118,308 @@ async function install() {
     try { fs.unlinkSync(tempPs1); } catch {}
   }
 
-  console.log(`\n✅ ConvertFlow sağ tık menüsü başarıyla kuruldu!`);
-  console.log(`   • Kayıtlı dosya uzantısı : ${extensions.length} adet (.pdf, .docx, .png, .mp4, .xlsx, .zip vb.)`);
+  console.log(`\n✅ ConvertFlow Windows sağ tık menüsü başarıyla kuruldu!`);
+  console.log(`   • Kayıtlı dosya uzantısı : ${extensions.length} adet`);
   console.log(`   • Toplam hızlı dönüşüm   : ${totalCommands} adet`);
   console.log(`   • Simge                  : ${ICON_PATH}`);
-  console.log(`\n💡 Windows 11 ipucu: Dosyaya "Shift + Sağ Tık" yaparak veya "Sağ Tık -> Diğer seçenekleri göster" menüsünden "ConvertFlow ile Dönüştür" menüsüne hemen ulaşabilirsiniz.\n`);
+  console.log(`\n💡 Windows 11 ipucu: Dosyaya "Shift + Sağ Tık" yaparak veya "Sağ Tık -> Diğer seçenekleri göster" menüsünden ulaşabilirsiniz.\n`);
+}
+
+// =====================================================================
+// 2. macOS (Finder Quick Actions / Automator .workflow)
+// =====================================================================
+function installMacOS() {
+  const servicesDir = path.join(os.homedir(), 'Library', 'Services');
+  const workflowDir = path.join(servicesDir, 'ConvertFlow ile Dönüştür.workflow');
+  const contentsDir = path.join(workflowDir, 'Contents');
+  fs.mkdirSync(contentsDir, { recursive: true });
+
+  const shellCommand = `#!/bin/bash
+NODE_BIN="${NODE_EXE}"
+CLI_JS="${CLI_SCRIPT}"
+FIRST_FILE="$1"
+[ -z "$FIRST_FILE" ] && exit 0
+
+TARGETS=$("$NODE_BIN" "$CLI_JS" --list-targets "$FIRST_FILE")
+[ -z "$TARGETS" ] && exit 0
+
+LABELS=$(echo "$TARGETS" | awk -F'|' '{print $2}' | sed 's/"/\\\\"/g' | awk '{printf "\\"%s\\", ", $0}' | sed 's/, $//')
+CHOSEN=$(osascript -e "choose from list {$LABELS} with title \\"ConvertFlow\\" with prompt \\"Hedef formatı seçin:\\"")
+[ "$CHOSEN" = "false" ] || [ -z "$CHOSEN" ] && exit 0
+
+TARGET_EXT=$(echo "$TARGETS" | awk -F'|' -v sel="$CHOSEN" '$2 == sel {print $1; exit}')
+[ -z "$TARGET_EXT" ] && exit 0
+
+for f in "$@"; do
+  "$NODE_BIN" "$CLI_JS" "$f" "$TARGET_EXT"
+done
+`;
+
+  const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key>
+      <dict>
+        <key>default</key>
+        <string>ConvertFlow ile Dönüştür</string>
+      </dict>
+      <key>NSMessage</key>
+      <string>runWorkflowAsService</string>
+      <key>NSSendFileTypes</key>
+      <array>
+        <string>public.item</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>
+`;
+
+  const docWflow = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>AMApplicationBuild</key>
+  <string>523</string>
+  <key>AMApplicationVersion</key>
+  <string>2.10</string>
+  <key>AMDocumentVersion</key>
+  <string>2</string>
+  <key>actions</key>
+  <array>
+    <dict>
+      <key>action</key>
+      <dict>
+        <key>AMAccepts</key>
+        <dict>
+          <key>Container</key>
+          <string>List</string>
+          <key>Optional</key>
+          <true/>
+          <key>Types</key>
+          <array>
+            <string>com.apple.cocoa.path</string>
+          </array>
+        </dict>
+        <key>AMActionVersion</key>
+        <string>2.0.3</string>
+        <key>AMApplication</key>
+        <array>
+          <string>Automator</string>
+        </array>
+        <key>AMParameterProperties</key>
+        <dict>
+          <key>COMMAND_STRING</key>
+          <dict/>
+          <key>CheckedForUserDefaultShell</key>
+          <dict/>
+          <key>inputMethod</key>
+          <dict/>
+          <key>shell</key>
+          <dict/>
+          <key>source</key>
+          <dict/>
+        </dict>
+        <key>AMProvides</key>
+        <dict>
+          <key>Container</key>
+          <string>List</string>
+          <key>Types</key>
+          <array>
+            <string>com.apple.cocoa.path</string>
+          </array>
+        </dict>
+        <key>ActionBundlePath</key>
+        <string>/System/Library/Automator/Run Shell Script.action</string>
+        <key>ActionName</key>
+        <string>Run Shell Script</string>
+        <key>ActionParameters</key>
+        <dict>
+          <key>COMMAND_STRING</key>
+          <string>${xmlEscape(shellCommand)}</string>
+          <key>CheckedForUserDefaultShell</key>
+          <true/>
+          <key>inputMethod</key>
+          <integer>1</integer>
+          <key>shell</key>
+          <string>/bin/bash</string>
+          <key>source</key>
+          <string></string>
+        </dict>
+        <key>BundleIdentifier</key>
+        <string>com.apple.RunShellScript</string>
+        <key>CFBundleVersion</key>
+        <string>2.0.3</string>
+        <key>CanShowSelectedItemsWhenRun</key>
+        <false/>
+        <key>CanShowWhenRun</key>
+        <true/>
+        <key>Category</key>
+        <array>
+          <string>AMCategoryUtilities</string>
+        </array>
+        <key>Class Name</key>
+        <string>RunShellScriptAction</string>
+        <key>InputUUID</key>
+        <string>A1B2C3D4-1111-2222-3333-444455556666</string>
+        <key>Keywords</key>
+        <array>
+          <string>Shell</string>
+          <string>Script</string>
+        </array>
+        <key>OutputUUID</key>
+        <string>B1C2D3E4-1111-2222-3333-444455556666</string>
+        <key>UUID</key>
+        <string>C1D2E3F4-1111-2222-3333-444455556666</string>
+        <key>UnlocalizedApplications</key>
+        <array>
+          <string>Automator</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
+  <key>connectors</key>
+  <dict/>
+  <key>workflowMetaData</key>
+  <dict>
+    <key>workflowTypeIdentifier</key>
+    <string>com.apple.Automator.servicesMenu</string>
+  </dict>
+</dict>
+</plist>
+`;
+
+  fs.writeFileSync(path.join(contentsDir, 'Info.plist'), infoPlist, 'utf-8');
+  fs.writeFileSync(path.join(contentsDir, 'document.wflow'), docWflow, 'utf-8');
+
+  try {
+    execFileSync('/System/Library/CoreServices/pbs', ['-flush'], { stdio: 'ignore' });
+  } catch {
+    // Ignore pbs refresh warning
+  }
+
+  console.log(`\n✅ ConvertFlow macOS Finder Quick Action kuruldu!`);
+  console.log(`   • Konum: ${workflowDir}`);
+  console.log(`\n💡 Kullanım: Finder'da herhangi bir dosyaya Sağ Tık -> Hızlı İşlemler (Quick Actions) -> "ConvertFlow ile Dönüştür"\n`);
+}
+
+// =====================================================================
+// 3. LINUX (Nautilus / Nemo / Caja Scripts + KDE Dolphin Service Menu)
+// =====================================================================
+function installLinux() {
+  const scriptContent = `#!/usr/bin/env bash
+NODE_BIN="${NODE_EXE}"
+CLI_JS="${CLI_SCRIPT}"
+
+# Resolve selected files from Nautilus/Nemo/Caja env or CLI args
+FILES=()
+if [ -n "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && FILES+=("$line")
+  done <<< "$NAUTILUS_SCRIPT_SELECTED_FILE_PATHS"
+elif [ -n "$NEMO_SCRIPT_SELECTED_FILE_PATHS" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && FILES+=("$line")
+  done <<< "$NEMO_SCRIPT_SELECTED_FILE_PATHS"
+else
+  FILES=("$@")
+fi
+
+[ \${#FILES[@]} -eq 0 ] && exit 0
+FIRST_FILE="\${FILES[0]}"
+TARGETS=$("$NODE_BIN" "$CLI_JS" --list-targets "$FIRST_FILE")
+[ -z "$TARGETS" ] && exit 0
+
+CHOICE=""
+if command -v zenity >/dev/null 2>&1; then
+  ZEN_ARGS=()
+  while IFS='|' read -r tgt lbl; do
+    ZEN_ARGS+=("$tgt" "$lbl")
+  done <<< "$TARGETS"
+  CHOICE=$(zenity --list --title="ConvertFlow" --text="Hedef formatı seçin:" --column="Format" --column="Açıklama" --hide-column=1 "\${ZEN_ARGS[@]}" --width=360 --height=420)
+elif command -v kdialog >/dev/null 2>&1; then
+  KD_ARGS=()
+  while IFS='|' read -r tgt lbl; do
+    KD_ARGS+=("$tgt" "$lbl")
+  done <<< "$TARGETS"
+  CHOICE=$(kdialog --menu "ConvertFlow - Hedef formatı seçin:" "\${KD_ARGS[@]}")
+fi
+
+[ -z "$CHOICE" ] && exit 0
+
+for f in "\${FILES[@]}"; do
+  "$NODE_BIN" "$CLI_JS" "$f" "$CHOICE"
+done
+`;
+
+  const scriptDirs = [
+    path.join(os.homedir(), '.local', 'share', 'nautilus', 'scripts'),
+    path.join(os.homedir(), '.local', 'share', 'nemo', 'scripts'),
+    path.join(os.homedir(), '.local', 'share', 'caja', 'scripts')
+  ];
+
+  for (const dir of scriptDirs) {
+    fs.mkdirSync(dir, { recursive: true });
+    const targetScript = path.join(dir, 'ConvertFlow ile Dönüştür');
+    fs.writeFileSync(targetScript, scriptContent, { encoding: 'utf-8', mode: 0o755 });
+    fs.chmodSync(targetScript, 0o755);
+  }
+
+  // KDE Dolphin Service Menu (cascading submenu)
+  const dolphinTargets = Object.keys(TARGET_LABELS).filter((t) => t !== 'extract');
+  const desktopLines = [
+    '[Desktop Entry]',
+    'Type=Service',
+    'MimeType=application/octet-stream;application/pdf;image/*;video/*;audio/*;text/*;application/vnd.openxmlformats-officedocument.*;application/zip;',
+    `Actions=${dolphinTargets.map((t) => `cf_${t}`).join(';')};`,
+    'X-KDE-Submenu=ConvertFlow ile Dönüştür',
+    'Icon=document-export',
+    ''
+  ];
+
+  for (const t of dolphinTargets) {
+    desktopLines.push(`[Desktop Action cf_${t}]`);
+    desktopLines.push(`Name=${TARGET_LABELS[t]}`);
+    desktopLines.push(`Exec="${NODE_EXE}" "${CLI_SCRIPT}" "%f" "${t}"`);
+    desktopLines.push('');
+  }
+
+  const kdeDirs = [
+    path.join(os.homedir(), '.local', 'share', 'kio', 'servicemenus'),
+    path.join(os.homedir(), '.local', 'share', 'kservices5', 'ServiceMenus')
+  ];
+
+  for (const kdir of kdeDirs) {
+    fs.mkdirSync(kdir, { recursive: true });
+    const df = path.join(kdir, 'convertflow.desktop');
+    fs.writeFileSync(df, desktopLines.join('\n'), { encoding: 'utf-8', mode: 0o755 });
+    fs.chmodSync(df, 0o755);
+  }
+
+  console.log(`\n✅ ConvertFlow Linux sağ tık menüsü kuruldu!`);
+  console.log(`   • GNOME Files / Nemo / Caja : Sağ Tık -> Scripts -> "ConvertFlow ile Dönüştür"`);
+  console.log(`   • KDE Dolphin               : Sağ Tık -> "ConvertFlow ile Dönüştür"`);
+  console.log(`   • Not: GNOME/Nemo için 'zenity' kurulu olması önerilir (sudo apt install zenity).\n`);
+}
+
+async function install() {
+  if (process.platform === 'win32') {
+    await installWindows();
+  } else if (process.platform === 'darwin') {
+    installMacOS();
+  } else if (process.platform === 'linux') {
+    installLinux();
+  } else {
+    console.error(`Desteklenmeyen işletim sistemi: ${process.platform}`);
+    process.exit(1);
+  }
 }
 
 install().catch((err) => {
   console.error('❌ Kurulum hatası:', err);
   process.exit(1);
 });
-

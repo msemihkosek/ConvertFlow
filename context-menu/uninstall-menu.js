@@ -1,4 +1,4 @@
-// ConvertFlow - Windows Right-Click Cascading Context Menu Uninstaller
+// ConvertFlow - Cross-Platform Context Menu Uninstaller (Windows, macOS, Linux)
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -9,12 +9,7 @@ function psEscape(str) {
   return String(str).replace(/'/g, "''");
 }
 
-function uninstall() {
-  if (process.platform !== 'win32') {
-    console.error('Bu işlem yalnızca Windows içindir.');
-    process.exit(1);
-  }
-
+function uninstallWindows() {
   const extensions = Object.keys(EXTENSION_TARGETS);
   const psLines = [
     '$ErrorActionPreference = "SilentlyContinue"',
@@ -26,7 +21,6 @@ function uninstall() {
     psLines.push(`$hkcu.DeleteSubKeyTree('Software\\Classes\\ConvertFlow.Menu.${psEscape(ext)}', $false)`);
   }
 
-  // Also clean any leftover ConvertFlow.Menu.* keys
   psLines.push(`
 $classesKey = $hkcu.OpenSubKey('Software\\Classes', $true)
 if ($classesKey) {
@@ -56,5 +50,43 @@ if ($classesKey) {
   console.log('✅ ConvertFlow sağ tık menüsü Windows kayıt defterinden temiz bir şekilde kaldırıldı.');
 }
 
-uninstall();
+function uninstallMacOS() {
+  const workflowDir = path.join(os.homedir(), 'Library', 'Services', 'ConvertFlow ile Dönüştür.workflow');
+  if (fs.existsSync(workflowDir)) {
+    fs.rmSync(workflowDir, { recursive: true, force: true });
+  }
+  try {
+    execFileSync('/System/Library/CoreServices/pbs', ['-flush'], { stdio: 'ignore' });
+  } catch {
+    // Ignore
+  }
+  console.log('✅ ConvertFlow Quick Action macOS üzerinden kaldırıldı.');
+}
 
+function uninstallLinux() {
+  const pathsToRemove = [
+    path.join(os.homedir(), '.local', 'share', 'nautilus', 'scripts', 'ConvertFlow ile Dönüştür'),
+    path.join(os.homedir(), '.local', 'share', 'nemo', 'scripts', 'ConvertFlow ile Dönüştür'),
+    path.join(os.homedir(), '.local', 'share', 'caja', 'scripts', 'ConvertFlow ile Dönüştür'),
+    path.join(os.homedir(), '.local', 'share', 'kio', 'servicemenus', 'convertflow.desktop'),
+    path.join(os.homedir(), '.local', 'share', 'kservices5', 'ServiceMenus', 'convertflow.desktop')
+  ];
+
+  for (const p of pathsToRemove) {
+    if (fs.existsSync(p)) {
+      fs.rmSync(p, { force: true });
+    }
+  }
+  console.log('✅ ConvertFlow sağ tık betikleri Linux üzerinden kaldırıldı.');
+}
+
+if (process.platform === 'win32') {
+  uninstallWindows();
+} else if (process.platform === 'darwin') {
+  uninstallMacOS();
+} else if (process.platform === 'linux') {
+  uninstallLinux();
+} else {
+  console.error(`Desteklenmeyen işletim sistemi: ${process.platform}`);
+  process.exit(1);
+}

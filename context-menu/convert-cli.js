@@ -1,10 +1,11 @@
-// ConvertFlow - CLI & Windows Context Menu Runner
+// ConvertFlow - Cross-Platform CLI & Context Menu Runner (Windows, macOS, Linux)
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { convertFileLocal } from './engine.js';
+import { getMenuTargetsForExtension } from './formats.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,25 +21,52 @@ function appendLog(line) {
   }
 }
 
+function escapeAppleScript(str) {
+  return String(str).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function sendToast(title, message, isError = false) {
-  if (process.argv.includes('--no-notify') || !fs.existsSync(NOTIFY_SCRIPT)) return;
+  if (process.argv.includes('--no-notify')) return;
   try {
-    const args = [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', NOTIFY_SCRIPT,
-      '-Title', title,
-      '-Message', message
-    ];
-    if (isError) args.push('-IsError');
-    execFileSync('powershell.exe', args, { timeout: 10000, windowsHide: true });
+    if (process.platform === 'win32') {
+      if (!fs.existsSync(NOTIFY_SCRIPT)) return;
+      const args = [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', NOTIFY_SCRIPT,
+        '-Title', title,
+        '-Message', message
+      ];
+      if (isError) args.push('-IsError');
+      execFileSync('powershell.exe', args, { timeout: 10000, windowsHide: true });
+    } else if (process.platform === 'darwin') {
+      const script = `display notification "${escapeAppleScript(message)}" with title "${escapeAppleScript(title)}"`;
+      execFileSync('osascript', ['-e', script], { timeout: 5000 });
+    } else if (process.platform === 'linux') {
+      execFileSync('notify-send', ['-a', 'ConvertFlow', ...(isError ? ['-u', 'critical'] : []), title, message], {
+        timeout: 5000,
+        stdio: 'ignore'
+      });
+    }
   } catch {
-    // Ignore toast failures
+    // Ignore notification failures
   }
 }
 
 async function main() {
+  // Helper flag for macOS/Linux context menu pickers to list supported targets for a file
+  const targetsIdx = process.argv.indexOf('--list-targets');
+  if (targetsIdx !== -1) {
+    const targetFile = process.argv[targetsIdx + 1] || '';
+    const ext = path.extname(targetFile).replace(/^\./, '').toLowerCase();
+    const list = getMenuTargetsForExtension(ext);
+    for (const item of list) {
+      console.log(`${item.target}|${item.label}`);
+    }
+    return;
+  }
+
   const cleanArgs = process.argv.slice(2).filter((a) => !a.startsWith('--'));
   const inputPath = cleanArgs[0];
   const targetFormat = cleanArgs[1];
@@ -51,7 +79,7 @@ async function main() {
   const fileName = path.basename(inputPath);
   appendLog(`START: "${inputPath}" -> ${targetFormat}`);
 
-  // For larger files or heavy formats (PDF, Office, Video), show immediate start toast
+  // Show immediate start notification on heavier conversions
   try {
     const ext = path.extname(inputPath).toLowerCase();
     const sizeBytes = fs.existsSync(inputPath) ? fs.statSync(inputPath).size : 0;
@@ -78,4 +106,3 @@ async function main() {
 }
 
 main();
-

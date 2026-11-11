@@ -8,6 +8,7 @@
   "author": "ConvertFlow",
   "scripts": {
     "convert": "node context-menu/convert-cli.js",
+    "setup": "node context-menu/setup.js",
     "menu:install": "node context-menu/install-menu.js",
     "menu:uninstall": "node context-menu/uninstall-menu.js",
     "menu:win11-classic": "node context-menu/win11-classic-menu.js enable",
